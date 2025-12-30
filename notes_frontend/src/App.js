@@ -21,6 +21,8 @@ function App() {
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState('');
 
+  const [appNotice, setAppNotice] = useState('');
+
   const lastLoadedRef = useRef(false);
 
   const selectedNote = useMemo(
@@ -45,8 +47,21 @@ function App() {
       const sorted = sortNotes(result || []);
       setNotes(sorted);
 
+      // If the backend is configured but unreachable, listNotes() falls back to local notes.
+      // Surface a small non-blocking message so users understand why.
+      if (isBackendConfigured()) {
+        setAppNotice(
+          'Backend is configured but unreachable. Showing local notes stored in this browser.'
+        );
+      } else {
+        setAppNotice('');
+      }
+
       // Select first note if none selected.
       if (!selectedId && sorted.length > 0) setSelectedId(sorted[0].id);
+    } catch (e) {
+      setAppNotice(e?.message || 'Unable to load notes.');
+      setNotes([]);
     } finally {
       setLoadingNotes(false);
     }
@@ -200,6 +215,13 @@ function App() {
                 />
                 Mode: {isBackendConfigured() ? 'Backend' : 'Local'}
               </div>
+
+              {appNotice ? (
+                <div className={styles.badge} role="status" aria-live="polite">
+                  {appNotice}
+                </div>
+              ) : null}
+
               <div className={styles.badge}>
                 <span>Shortcuts:</span> <kbd>Ctrl</kbd>+<kbd>N</kbd>, <kbd>Ctrl</kbd>+<kbd>S</kbd>
               </div>

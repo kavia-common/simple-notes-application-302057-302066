@@ -1,23 +1,38 @@
-import { isBackendConfigured, getBackendBaseUrl } from '../config/env';
+import { isBackendEnabled, getBackendBaseUrl } from '../config/env';
 import { generateId, nowIso, normalizeTitle, sortNotes } from '../utils/notesUtils';
 
 const STORAGE_KEY = 'simpleNotes.notes.v1';
 
 /**
- * Future-ready REST adapter (not enabled until REACT_APP_BACKEND_URL is set).
+ * Future-ready REST adapter (not enabled until backend env is set).
  * Keeping the shape here makes it easy to swap implementations later.
  */
 async function backendRequest(path, options = {}) {
   const base = getBackendBaseUrl();
+  if (!base) {
+    // Defensive: never attempt fetch when backend is disabled.
+    throw new Error('Backend is not configured.');
+  }
+
   const url = `${base.replace(/\/$/, '')}${path}`;
-  const res = await fetch(url, {
-    headers: { 'Content-Type': 'application/json', ...(options.headers || {}) },
-    ...options,
-  });
+
+  let res;
+  try {
+    res = await fetch(url, {
+      headers: { 'Content-Type': 'application/json', ...(options.headers || {}) },
+      ...options,
+    });
+  } catch (e) {
+    // Typical browser error when server is down / CORS / DNS: "Failed to fetch".
+    const msg = e?.message || 'Failed to fetch.';
+    throw new Error(`Network error: ${msg}`);
+  }
+
   if (!res.ok) {
     const text = await res.text().catch(() => '');
     throw new Error(text || `Request failed (${res.status})`);
   }
+
   const contentType = res.headers.get('content-type') || '';
   if (contentType.includes('application/json')) return res.json();
   return res.text();
@@ -59,20 +74,42 @@ function ensureSeedDataIfEmpty(notes) {
   return seed;
 }
 
+function getLocalNotesWithSeed() {
+  return sortNotes(ensureSeedDataIfEmpty(readLocalNotes()));
+}
+
+function isLikelyNetworkError(err) {
+  const msg = (err?.message || '').toLowerCase();
+  return (
+    msg.includes('failed to fetch') ||
+    msg.includes('network error') ||
+    msg.includes('ecconnrefused') ||
+    msg.includes('timeout')
+  );
+}
+
 // PUBLIC_INTERFACE
 export async function listNotes() {
   /** List notes (localStorage by default). */
-  if (isBackendConfigured()) {
-    return backendRequest('/notes', { method: 'GET' });
+  if (!isBackendEnabled()) {
+    return getLocalNotesWithSeed();
   }
-  const notes = ensureSeedDataIfEmpty(readLocalNotes());
-  return sortNotes(notes);
+
+  try {
+    return await backendRequest('/notes', { method: 'GET' });
+  } catch (err) {
+    // Graceful fallback: if backend is configured but unreachable, don't crash the app on mount.
+    if (isLikelyNetworkError(err)) {
+      return getLocalNotesWithSeed();
+    }
+    throw err;
+  }
 }
 
 // PUBLIC_INTERFACE
 export async function getNote(id) {
   /** Fetch a note by id. */
-  if (isBackendConfigured()) {
+  if (isBackendEnabled()) {
     return backendRequest(`/notes/${encodeURIComponent(id)}`, { method: 'GET' });
   }
   const notes = readLocalNotes();
@@ -82,7 +119,7 @@ export async function getNote(id) {
 // PUBLIC_INTERFACE
 export async function createNote(partial) {
   /** Create a new note. Returns created note. */
-  if (isBackendConfigured()) {
+  if (isBackendEnabled()) {
     return backendRequest('/notes', { method: 'POST', body: JSON.stringify(partial) });
   }
 
@@ -106,7 +143,7 @@ export async function createNote(partial) {
 // PUBLIC_INTERFACE
 export async function updateNote(id, patch) {
   /** Update a note. Returns updated note. */
-  if (isBackendConfigured()) {
+  if (isBackendEnabled()) {
     return backendRequest(`/notes/${encodeURIComponent(id)}`, {
       method: 'PATCH',
       body: JSON.stringify(patch),
@@ -134,7 +171,7 @@ export async function updateNote(id, patch) {
 // PUBLIC_INTERFACE
 export async function deleteNote(id) {
   /** Delete note by id. Returns { ok: true }. */
-  if (isBackendConfigured()) {
+  if (isBackendEnabled()) {
     return backendRequest(`/notes/${encodeURIComponent(id)}`, { method: 'DELETE' });
   }
   const notes = readLocalNotes();
